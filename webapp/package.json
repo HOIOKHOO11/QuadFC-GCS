@@ -1,6 +1,6 @@
 {
   "name": "nextjs_tailwind_shadcn_ts",
-  "version": "0.2.1",
+  "version": "2.0.0",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000 2>&1 | tee dev.log",
@@ -10,9 +10,11 @@
     "db:push": "prisma db push --accept-data-loss",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
-    "db:reset": "prisma migrate reset"
+    "db:reset": "prisma migrate reset",
+    "dist:win": "next build && electron-builder --win portable --config electron-builder.yml"
   },
-  "dependencies": {
+  "dependencies": {},
+  "devDependencies": {
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
@@ -47,13 +49,24 @@
     "@radix-ui/react-toggle-group": "^1.1.10",
     "@radix-ui/react-tooltip": "^1.2.7",
     "@reactuses/core": "^6.0.5",
+    "@tailwindcss/postcss": "^4",
     "@tanstack/react-query": "^5.82.0",
     "@tanstack/react-table": "^8.21.3",
+    "@types/leaflet": "^1.9.22",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/three": "^0.187.0",
+    "@types/w3c-web-serial": "^1.0.9",
+    "bun-types": "^1.3.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "date-fns": "^4.1.0",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
     "embla-carousel-react": "^8.6.0",
+    "eslint": "^9",
+    "eslint-config-next": "^16.1.1",
     "framer-motion": "^12.23.2",
     "input-otp": "^1.4.2",
     "leaflet": "^1.9.4",
@@ -74,8 +87,11 @@
     "sharp": "^0.34.3",
     "sonner": "^2.0.6",
     "tailwind-merge": "^3.3.1",
+    "tailwindcss": "^4",
     "tailwindcss-animate": "^1.0.7",
     "three": "^0.187.0",
+    "tw-animate-css": "^1.3.5",
+    "typescript": "^5",
     "uuid": "^11.1.0",
     "vaul": "^1.1.2",
     "vazirmatn": "^33.0.3",
@@ -83,18 +99,10 @@
     "zod": "^4.0.2",
     "zustand": "^5.0.6"
   },
-  "devDependencies": {
-    "@tailwindcss/postcss": "^4",
-    "@types/leaflet": "^1.9.22",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "@types/three": "^0.187.0",
-    "@types/w3c-web-serial": "^1.0.9",
-    "bun-types": "^1.3.4",
-    "eslint": "^9",
-    "eslint-config-next": "^16.1.1",
-    "tailwindcss": "^4",
-    "tw-animate-css": "^1.3.5",
-    "typescript": "^5"
+  "main": "electron/main.js",
+  "description": "QuadFC GCS — Persian ground station (web) for QuadFC Logger v7 / Validation Suite v4.0",
+  "author": {
+    "name": "QuadFC",
+    "email": "quadfc@users.noreply.github.com"
   }
 }

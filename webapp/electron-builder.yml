@@ -1,0 +1,20 @@
+appId: ir.quadfc.gcs
+productName: QuadFC-GCS
+copyright: QuadFC GCS — Logger v7 Compatible
+directories:
+  output: dist-desktop
+files:
+  - electron/**
+  - out/**
+  - package.json
+asar: true
+compression: maximum
+win:
+  icon: build/icon.ico
+  target:
+    - target: portable
+      arch:
+        - x64
+  artifactName: QuadFC-GCS.${ext}
+portable:
+  artifactName: QuadFC-GCS.${ext}

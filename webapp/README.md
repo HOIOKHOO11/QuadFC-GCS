@@ -39,6 +39,19 @@ bun run dev        # یا: npm run dev
 - `src/lib/qfc/engine.ts` — موتور اتصال، شناسایی فریمور، شبیه‌ساز، بازپخش
 - `src/lib/qfc/valsuite.ts` — پارسر سوئیت اعتبارسنجی v4.0
 - `src/components/qfc/` — رابط کاربری (تب‌ها، ابزارها، نقشه، سه‌بعدی)
+- `electron/` — پوستهٔ دسکتاپ: سرور استاتیک محلی + فعال‌سازی Web Serial
 
-فایل EXE مستقل ویندوز (نسخهٔ دسکتاپ tkinter همین GCS) از
-[Releaseهای مخزن](../../releases) قابل دانلود است.
+## 🖥️ ساخت EXE دسکتاپ (همان برنامه در پوستهٔ Electron)
+
+```bash
+cd webapp
+npm install
+NEXT_OUTPUT=export npx next build          # خروجی استاتیک → out/
+npx electron-builder --win portable --config electron-builder.yml
+# خروجی: dist-desktop/QuadFC-GCS.exe  (پرتابل، بدون نصب)
+```
+
+در EXE، Web Serial از طریق هندلرهای `select-serial-port` فعال شده است؛
+اگر چند پورت وصل باشد **اولین پورت** برداشته می‌شود — فقط دانگل برد را وصل نگه دارید.
+این EXE از [Releaseهای مخزن](../../releases) هم قابل دانلود است (تگ `v2.0.0` به بعد).
+

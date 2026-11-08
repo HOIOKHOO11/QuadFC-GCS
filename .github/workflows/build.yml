@@ -1,4 +1,4 @@
-name: Build Windows EXE
+name: Build Windows EXE (Electron — web GCS)
 
 on:
   push:
@@ -15,25 +15,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         with:
-          python-version: '3.11'
+          node-version: '20'
 
-      - name: Install dependencies
-        run: pip install pyserial pyinstaller
+      - name: Install dependencies (webapp + Electron toolchain)
+        working-directory: webapp
+        run: npm install --no-audit --no-fund
+        shell: bash
 
-      - name: Build standalone EXE
-        run: pyinstaller --noconfirm --clean --onefile --windowed --name QuadFC-GCS main.py
+      - name: Static export of the web GCS (out/)
+        working-directory: webapp
+        env:
+          NEXT_OUTPUT: export
+        run: npx next build
+        shell: bash
+
+      - name: Package portable EXE
+        working-directory: webapp
+        run: npx electron-builder --win portable --config electron-builder.yml
+        shell: bash
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: QuadFC-GCS-windows-x64
-          path: dist/QuadFC-GCS.exe
-          if-no-files-found: error
+          name: QuadFC-GCS-windows
+          path: webapp/dist-desktop/*.exe
 
-      - name: Attach EXE to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Publish release (only on v* tags)
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/QuadFC-GCS.exe
+          files: webapp/dist-desktop/QuadFC-GCS.exe
