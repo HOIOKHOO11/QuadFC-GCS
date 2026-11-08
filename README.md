@@ -1,0 +1,96 @@
+# QuadFC GCS — ایستگاه کنترل زمینی فارسی 🛰️
+
+[![Build Windows EXE](https://github.com/HOIOKHOO11/QuadFC-GCS/actions/workflows/build.yml/badge.svg)](https://github.com/HOIOKHOO11/QuadFC-GCS/actions/workflows/build.yml)
+![Release](https://img.shields.io/github/v/release/HOIOKHOO11/QuadFC-GCS)
+
+GCS گرافیکی (tkinter — پایتون ۳.۸+) برای کوادکوپتر **QuadFC F103** روی لینک سریال / HC-12.
+پروتکل باینری **v1.2** با CRC-16 — هم‌تراز کامل با `firmware/telemetry.c` (فریم‌ور v2.2).
+
+## 📦 دانلود EXE آماده (بدون نیاز به نصب پایتون)
+
+دو راه دارید:
+
+1. **Releases** → آخرین نسخه → فایل `QuadFC-GCS.exe` را دانلود و اجرا کنید:
+   👉 https://github.com/HOIOKHOO11/QuadFC-GCS/releases/latest
+2. **Actions** → آخرین بیلد سبز → Artifact ‏`QuadFC-GCS-windows-x64` → دانلود zip.
+
+> ⚠️ **SmartScreen ویندوز**: چون فایل امضای دیجیتال ندارد، اولین اجرا ممکن است
+> هشدار بدهد: «More info → Run anyway» را بزنید. فایل در Actions از سورس همین ریپو ساخته می‌شود.
+
+## ▶️ اجرا از سورس
+
+```bash
+pip install pyserial
+python main.py
+```
+
+بدون pyserial هم برنامه اجرا می‌شود (فقط حالت دمو؛ پورت سریال غیرفعال است).
+
+## ✨ قابلیت‌ها
+
+- **پروتکل باینری** `[A5][5A][LEN][TYPE][SEQ][PAYLOAD][CRC_L][CRC_H]` با CRC-16/CCITT — پارسر وضعیت‌دار بایت‌به‌بایت (هم‌تراز `feed_byte()` فریم‌ور)
+- **STATUS با تشخیص خودکار نسخه**: 41 بایت (قدیمی) / 43 (v2) / **54 بایت (v1.2: loop_max_us، overruns، vz، rc_age، arm_denied، health2، home_gate، motor_test)**
+- **فرمان‌ها**: Arm / Disarm، برخاست، فرود، RTH، لغو، کالیبراسیون ACC/MAG،
+  **کالیبراسیون شش‌جهته شتاب (CMD_CAL_ACC6 — هر بار یک صورت 0..5)**،
+  **ارسال ماتریس نرم‌آهنی مگ ۳×۳ (CMD_SET_MAG_MAT)**، ذخیره تنظیمات، تست موتور،
+  تعیین گاز هاور، ریبوت — با نظارت ACK و هشدار timeout
+- **تب تست موتور**: هشدار حذف پره‌ها، M1..M4 با جهت پروانه، پالس 1000..1150µs
+  (سقف فریم‌ور)، اجرای ۲ ثانیه‌ای، STOP (idx=0xFF)، برچسب وضعیت از بایت motor_test
+- **تب سلامت و لاگ v1.2**: فیلدهای جدید STATUS + اسلات‌های DEBUG چرخشی (12 اسلات × 4 float)
+- افق مصنوعی + قطب‌نما + نمودار ارتفاع/ولتاژ/باتری
+- لاگ رویدادها (با رمزگشایی argهای EVT_CALIB_DONE)، آمار لینک (RX/TX/خطای CRC)، کیفیت لینک دوطرفه
+- **ضربان ۲ هرتز** از سمت GCS با فیلد کیفیت — هم‌تراز منطق failsafe فریم‌ور (1.5s)
+- **حالت دمو**: شبیه‌ساز پرواز کامل (GPS، برخاست/فرود/RTH، یادگیری هاور، باتری کم،
+  STATUS 54 بایتی، DEBUG چرخشی، کالیبراسیون ۶-جهته و ماتریس مگ) — **بدون هیچ سخت‌افزاری**
+
+## 🖥️ تب‌ها
+
+| تب | محتوا |
+|---|---|
+| پرواز | افق مصنوعی، قطب‌نما، وضعیت ARM/حالت پرواز، GPS، ارتفاع، ولتاژ |
+| تست موتور | تست تک‌موتور ایمن (فقط دیس‌آرم، سقف 1150µs، توقف خودکار 2s) |
+| کالیبراسیون | ACC/MAG + شش‌جهته + ماتریس مگ |
+| سلامت و لاگ | بایت‌های health/health2، home_gate، arm_denied، اسلات‌های DEBUG |
+| رویدادها | لاگ EVENTS با رمزگشایی کامل argها |
+| کنسول | لاگ خام فریم‌ها و آمار لینک |
+
+## 🔌 سیم‌بندی لینک
+
+HC-12 → USART1 برد (PA9/PA10) — بادریت پیش‌فرض **9600**.
+فریم‌ور مرجع: پوشه `firmware/` همین ریپو (`telemetry.c` / `telemetry.h`).
+
+## 🏗️ ساخت EXE به‌صورت دستی
+
+```bash
+pip install pyserial pyinstaller
+pyinstaller --noconfirm --clean --onefile --windowed --name QuadFC-GCS main.py
+# خروجی: dist/QuadFC-GCS.exe
+```
+
+بیلد خودکار: هر push به `main` و هر تگ `v*` → تب **Actions**.
+تگ جدید = انتشار خودکار در **Releases**.
+
+## 📁 ساختار ریپو
+
+```
+├── main.py            # اپلیکیشن tkinter (نقطه ورود)
+├── protocol.py        # کدک پروتکل v1.2 + پارسرها
+├── link.py            # لایه سریال: نخ RX + ضربان + کیفیت لینک (pyserial اختیاری)
+├── widgets.py         # ابزارهای رسم (افق، قطب‌نما، نمودار)
+├── demo.py            # شبیه‌ساز کامل کواد برای حالت دمو
+├── firmware/          # پیاده‌سازی مرجع سمت فریم‌ور (STM32F103)
+│   ├── telemetry.c
+│   └── telemetry.h
+├── PROTOCOL.md        # مستندات کامل پروتکل
+└── .github/workflows/build.yml   # بیلد EXE ویندوز
+```
+
+## 🔐 امنیت
+
+- هرگز توکن/کلید گیت‌هاب را در چت، کد یا commit قرار ندهید.
+- اگر توکنی جایی افشا شد، بلافاصله از Settings → Developer settings → **Revoke** کنید.
+- بهترین روش برای push: توکن fine-grained با دسترسی فقط به همین ریپو و انقضای کوتاه.
+
+## 📄 لایسنس
+
+MIT — متن کامل در [LICENSE](LICENSE).
