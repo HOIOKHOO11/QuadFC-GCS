@@ -5,6 +5,7 @@ import type { Sev } from './protocol';
 import type { VsDevice, VsPrompt, VsScanInfo, VsStress, VsTestKey } from './valsuite';
 import { analyzeBattery, type BatteryInfo } from './battery';
 import { baroAltitudeM, utcFromField, dateFromField, wrap360 } from './format';
+import type { ChooserMsg, ChooserPort } from './serial';
 
 export type ConnMode = 'off' | 'detect' | 'logger' | 'valsuite' | 'nmea' | 'sim' | 'replay';
 export type ConnStatus = 'off' | 'connecting' | 'on';
@@ -58,6 +59,25 @@ export interface Calib {
   magBias: { x: number; y: number; z: number } | null;
   magScale: { x: number; y: number; z: number } | null;
 }
+
+// ---------- COM port chooser (Electron shell) ----------
+export interface ChooserState {
+  open: boolean;
+  requestId: number;
+  ports: ChooserPort[];
+  waitingNew: boolean;   // list empty → we keep waiting for a freshly plugged adapter
+  note: string;          // transient Persian note (added/removed/refresh/…)
+  remainingMs: number;   // chooser deadline for the countdown
+  lastPicked: ChooserPort | null; // persists in-session; feeds the COM port label
+  lastOutcome: '' | 'cancel' | 'timeout'; // read by engine on null request result
+}
+
+const CHOOSER0: ChooserState = {
+  open: false, requestId: 0, ports: [], waitingNew: false, note: '',
+  remainingMs: 0, lastPicked: null, lastOutcome: '',
+};
+
+const LAST_COM_KEY = 'qfc.lastCom';
 
 export interface Telemetry {
   last: Record<string, number> | null;
@@ -127,6 +147,7 @@ interface GS {
   cal: Calib;
   calSaveNote: string;
   vs: VsState;
+  chooser: ChooserState;
 
   vsReset: () => void;
   vsApply: (p: import('./valsuite').VsPatch & { prompt?: VsPrompt | null }) => void;
@@ -142,6 +163,8 @@ interface GS {
   applyNmea: (d: import('./protocol').NmeaData) => void;
   applyQ: (q: Record<string, number>) => void;
   resetTelemetry: () => void;
+  chooserApply: (msg: ChooserMsg) => void;
+  chooserDismiss: () => void;
 }
 
 let evId = 1, conId = 1;
@@ -159,6 +182,7 @@ export const useGS = create<GS>((set, get) => ({
   cal: { gyro: null, accBias: null, accScale: null, magBias: null, magScale: null },
   calSaveNote: '',
   vs: { ...VS0 },
+  chooser: { ...CHOOSER0, ports: [] },
 
   vsReset: () => set({ vs: { ...VS0, tests: {}, i2c: {}, uart: {}, calFlags: {}, devices: [], stressSummary: [] } }),
   vsApply: (p) => {
@@ -368,6 +392,46 @@ export const useGS = create<GS>((set, get) => ({
     hist: { alt: [], bat: [], acc: [], gyr: [], mg: [] },
     trail: [],
   }),
+
+  // messages pushed from the Electron main-process ChooserHub ('qfc:chooser')
+  chooserApply: (msg) => {
+    const ch = get().chooser;
+    switch (msg.type) {
+      case 'open':
+        set({ chooser: { ...ch, open: true, requestId: msg.requestId, ports: msg.ports, waitingNew: !!msg.waitingNew, note: '', remainingMs: msg.remainingMs, lastOutcome: '' } });
+        break;
+      case 'update': {
+        if (msg.requestId !== ch.requestId) return;
+        const note = msg.added ? `پورت جدید شناسایی شد: ${msg.added}`
+          : msg.removed ? `${msg.removed} قطع شد`
+          : ch.note;
+        set({ chooser: { ...ch, ports: msg.ports, waitingNew: !!msg.waitingNew, note } });
+        break;
+      }
+      case 'refreshing':
+        set({ chooser: { ...ch, note: 'در حال بروزرسانی فهرست COM…' } });
+        break;
+      case 'note':
+        if (msg.requestId === ch.requestId) set({ chooser: { ...ch, note: msg.text } });
+        break;
+      case 'timeout':
+        if (msg.requestId === ch.requestId) set({ chooser: { ...ch, lastOutcome: 'timeout', note: 'هیچ پورت سریالی شناسایی نشد (مدت انتظار به پایان رسید)' } });
+        break;
+      case 'close': {
+        const next: ChooserState = { ...ch, open: false, note: '' };
+        if (msg.reason === 'picked' && msg.picked) {
+          next.lastPicked = msg.picked;
+          try { localStorage.setItem(LAST_COM_KEY, msg.picked.comName); } catch { /* ignore */ }
+        }
+        next.lastOutcome = msg.reason === 'timeout' ? 'timeout'
+          : (msg.reason === 'cancel' || msg.reason === 'superseded') ? 'cancel' : '';
+        set({ chooser: next });
+        break;
+      }
+    }
+  },
+
+  chooserDismiss: () => set({ chooser: { ...get().chooser, open: false, note: '' } }),
 }));
 
 // load persisted settings/calibration (client only)

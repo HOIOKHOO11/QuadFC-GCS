@@ -1,7 +1,7 @@
 'use client';
 
 import { useGS, loadPersisted } from './store';
-import { SerialClient, cachedPorts, requestPort, portLabel, detectBaud, serialSupported, sleep } from './serial';
+import { SerialClient, cachedPorts, requestPortInteractive, qfcShell, portLabel, detectBaud, serialSupported, sleep } from './serial';
 import { parseDFrame, parseQFrame, parseNmea, interpretText, splitLogTokens, cleanLiveLine } from './protocol';
 import { parseVsLine, isLoggerIdLine } from './valsuite';
 import { Simulator, VsSimulator } from './simulator';
@@ -145,13 +145,16 @@ class Engine {
       return;
     }
     gs.setConn({ status: 'connecting' });
-    let ports = await cachedPorts();
-    if (ports.length === 0) {
-      const p = await requestPort();
-      if (!p) { gs.setConn({ status: 'off' }); return; }
-      ports = [p];
+    // In the Electron shell there is NO silent auto-connect: the cached-grants
+    // list can be stale across restarts, so the user always picks the COM port
+    // by name (v2.1.0). In a plain browser a single cached grant is unambiguous.
+    if (!qfcShell()) {
+      const ports = await cachedPorts();
+      if (ports.length === 1) { await this.openPort(ports[0]); return; }
     }
-    await this.openPort(ports[0]);
+    const p = await requestPortInteractive();
+    if (!p) { this.connectDenied(); return; }
+    await this.openPort(p);
   }
 
   async connectManual(): Promise<void> {
@@ -161,9 +164,22 @@ class Engine {
       return;
     }
     gs.setConn({ status: 'connecting' });
-    const p = await requestPort();
-    if (!p) { gs.setConn({ status: 'off' }); return; }
+    const p = await requestPortInteractive();
+    if (!p) { this.connectDenied(); return; }
     await this.openPort(p);
+  }
+
+  // requestPort resolved null — distinguish a real timeout from a plain cancel
+  private connectDenied(): void {
+    const gs = useGS.getState();
+    gs.setConn({ status: 'off' });
+    if (gs.chooser.lastOutcome === 'timeout') {
+      gs.pushEvent({
+        sev: 'err', title: 'هیچ پورت سریالی شناسایی نشد',
+        detail: '۳۰ ثانیه منتظر ماندیم؛ هیچ COM جدیدی ظاهر نشد.',
+        action: 'آداپتور USB-TTL را وصل کن (یا جدا و دوباره وصل کن) و دوباره «اتصال» بزن.',
+      });
+    }
   }
 
   private async openPort(port: SerialPort): Promise<void> {
@@ -211,7 +227,12 @@ class Engine {
   }
 
   private portIdxLabel(port: SerialPort): string {
-    // Web Serial gives no friendly name; index-based label
+    // shell chooser knows the real OS name ("COM5") — prefer it over USB-x indices
+    const picked = useGS.getState().chooser.lastPicked;
+    if (picked?.comName) {
+      const usb = picked.vid && picked.pid ? ` · VID:${picked.vid} PID:${picked.pid}` : '';
+      return `${picked.comName}${usb}`;
+    }
     return portLabel(port, 0);
   }
 

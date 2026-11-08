@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { ConnectionBar } from '@/components/qfc/ConnectionBar';
+import { PortChooser } from '@/components/qfc/PortChooser';
 import { OverviewTab } from '@/components/qfc/tabs/OverviewTab';
 import { Attitude3DTab } from '@/components/qfc/tabs/Attitude3DTab';
 import { MapTab } from '@/components/qfc/tabs/MapTab';
@@ -52,6 +53,7 @@ export default function Home() {
             </h1>
           </div>
           <ConnectionBar />
+          <PortChooser />
           {/* tabs */}
           <nav className="flex gap-1 overflow-x-auto pb-1 -mb-px" aria-label="تب‌ها">
             {TABS.map(t => {

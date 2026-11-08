@@ -100,8 +100,7 @@ export function serialSupported(): boolean {
 export async function cachedPorts(): Promise<SerialPort[]> {
   if (!serialSupported()) return [];
   try {
-    const ports = await navigator.serial.getPorts();
-    return ports.filter(p => (p as SerialPort).opened !== undefined || true);
+    return await navigator.serial.getPorts(); // previously-granted ports only
   } catch { return []; }
 }
 
@@ -112,6 +111,81 @@ export async function requestPort(): Promise<SerialPort | null> {
   } catch { return null; }
 }
 
+// ---------- Electron shell chooser bridge ----------
+//
+// Inside the Electron EXE the main process owns 'select-serial-port' (Web
+// Serial docs pattern): instead of auto-picking the first COM port, it
+// forwards the full port list here and the user picks a port BY NAME (COM…).
+// The list refreshes live (serial-port-added/removed) and the request stays
+// pending while a freshly plugged adapter enumerates.
+
+export interface ChooserPort {
+  id: string;
+  comName: string;      // OS-level name, e.g. "COM5" (Electron SerialPort.portName)
+  displayName: string;
+  vid: string;
+  pid: string;
+  serial: string;
+}
+
+export type ChooserMsg =
+  | { type: 'open'; requestId: number; ports: ChooserPort[]; waitingNew?: boolean; remainingMs: number }
+  | { type: 'update'; requestId: number; ports: ChooserPort[]; added?: string; removed?: string; waitingNew?: boolean }
+  | { type: 'refreshing'; requestId: number }
+  | { type: 'note'; requestId: number; text: string }
+  | { type: 'timeout'; requestId: number }
+  | { type: 'close'; requestId: number; reason: 'picked' | 'cancel' | 'timeout' | 'superseded'; picked?: ChooserPort };
+
+export interface QfcSerialBridge {
+  isShell: boolean;
+  onChooser: (cb: (msg: ChooserMsg) => void) => () => void;
+  pick: (requestId: number, decision: string | null) => void;
+}
+
+declare global {
+  interface Window {
+    qfcSerial?: QfcSerialBridge;
+  }
+}
+
+export function qfcBridge(): QfcSerialBridge | null {
+  if (typeof window === 'undefined') return null;
+  return window.qfcSerial ?? null;
+}
+
+export function qfcShell(): boolean {
+  return qfcBridge() !== null;
+}
+
+let refreshNext = false;
+
+/** Shell chooser: ask for a fresh COM enumeration (chooser stays open). */
+export function chooserRefresh(): void {
+  if (qfcShell()) refreshNext = true;
+}
+
+/**
+ * Interactive port request.
+ *  - browser: Chrome's own chooser shows up → port or null (cancelled)
+ *  - shell:   the in-app COM chooser shows up (PortChooser.tsx) → port or null
+ *             (cancelled / timed out); a 'refresh' decision re-enumerates and
+ *             loops instead of resolving null, so the chooser list is renewed.
+ */
+export async function requestPortInteractive(): Promise<SerialPort | null> {
+  if (!serialSupported()) return null;
+  for (let i = 0; i < 8; i++) {
+    const wasRefresh = refreshNext;
+    refreshNext = false;
+    try {
+      return await navigator.serial.requestPort({});
+    } catch {
+      if (wasRefresh) continue; // refresh pressed → enumerate again with a fresh list
+      return null;              // user cancelled / chooser denied / timed out
+    }
+  }
+  return null;
+}
+
 export function portLabel(port: SerialPort, idx: number): string {
   const info = port.getInfo?.() ?? {} as SerialPortInfo;
   const vid = (info as { usbVendorId?: number }).usbVendorId;
@@ -120,6 +194,16 @@ export function portLabel(port: SerialPort, idx: number): string {
     return `USB-${idx + 1} (VID:${vid.toString(16).padStart(4, '0')} PID:${pid.toString(16).padStart(4, '0')})`;
   }
   return `پورت سریال #${idx + 1}`;
+}
+
+/** UI label for a chooser port row: "COM5 — USB-SERIAL CH340 · VID:1A86 PID:7523" */
+export function chooserLabel(p: ChooserPort): string {
+  const bits: string[] = [];
+  if (p.displayName) bits.push(p.displayName);
+  if (p.vid && p.pid) bits.push(`VID:${p.vid} PID:${p.pid}`);
+  if (p.serial) bits.push(`SN:${p.serial}`);
+  const suffix = bits.length ? ` — ${bits.join(' · ')}` : '';
+  return `${p.comName || '?'}${suffix}`;
 }
 
 const BAUD_RATES = [9600, 115200, 57600, 38400, 19200, 4800];
