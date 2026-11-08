@@ -6,6 +6,17 @@
 GCS گرافیکی (tkinter — پایتون ۳.۸+) برای کوادکوپتر **QuadFC F103** روی لینک سریال / HC-12.
 پروتکل باینری **v1.2** با CRC-16 — هم‌تراز کامل با `firmware/telemetry.c` (فریم‌ور v2.2).
 
+## 🌐 نسخهٔ وب (همان برنامهٔ پرِیو)
+
+سورس کامل نسخهٔ وبی GCS (Web Serial + تشخیص خودکار فریمور/بادریت + بازپخش لاگ PuTTY)
+در پوشهٔ [`webapp/`](webapp) است — سازگار با همان `quadfc_logger_v7.hex`:
+
+```bash
+cd webapp && bun install && bun run dev
+```
+
+با **Chrome/Edge دسکتاپ** باز کنید؛ جزئیات در [webapp/README.md](webapp/README.md).
+
 ## 📦 دانلود EXE آماده (بدون نیاز به نصب پایتون)
 
 دو راه دارید:
@@ -105,6 +116,7 @@ pyinstaller --noconfirm --clean --onefile --windowed --name QuadFC-GCS main.py
 ├── link.py            # لایه سریال: نخ RX + ضربان + کیفیت لینک (pyserial اختیاری)
 ├── widgets.py         # ابزارهای رسم (افق، قطب‌نما، نمودار)
 ├── demo.py            # شبیه‌ساز کامل کواد برای حالت دمو
+├── webapp/            # نسخهٔ وبی GCS (Web Serial) — سورس دقیق پرِیو
 ├── firmware/          # پیاده‌سازی مرجع سمت فریم‌ور (STM32F103)
 │   ├── telemetry.c
 │   └── telemetry.h
