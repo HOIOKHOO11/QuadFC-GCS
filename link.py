@@ -24,6 +24,7 @@ from protocol import (FrameParser, build_frame,
 
 FS_HB_LOST_COUNT = 3         # مطابق فریم‌ور: 1.5s تا قطع لینک
 HB_PERIOD_S      = 0.5       # ضربان 2Hz
+MAX_LINE_BUF     = 8192      # سقف بافر خط (حالت متنی)
 
 
 def _quality_from_dt(dt):
@@ -63,6 +64,10 @@ class QuadLink:
         self.crc_errors = 0               # ✅ اصلاح #۲: شمارنده زنده
         self.tx_frames = 0
         self.alive = True
+        # تشخیص خودکار پروتکل: 'auto' → با اولین داده قفل می‌شود روی
+        # 'binary' (QuadFC F103 — فریم A5 5A) یا 'csv' (Logger v7 — خطوط متنی)
+        self.mode = 'auto'
+        self.rx_lines = 0
         self._rx = threading.Thread(target=self._rx_loop, daemon=True)
         self._rx.start()
 
@@ -77,14 +82,64 @@ class QuadLink:
         self.frame_q.put(('crcerr', None, None, None))
 
     def _rx_loop(self):
+        buf = bytearray()
         while self.alive:
             try:
                 data = self.ser.read(256)
             except Exception:
                 data = b""
-            for b in data:
-                self.parser.feed_byte(b)
-            self._maybe_beat()
+            if data:
+                if self.mode == 'binary':
+                    for b in data:
+                        self.parser.feed_byte(b)
+                elif b'\xa5\x5a' in data:
+                    # فریم‌ور باینری QuadFC F103 — قفل دائمی روی حالت باینری
+                    self.mode = 'binary'
+                    self.frame_q.put(('mode', None, None, 'binary'))
+                    idx = data.find(b'\xa5\x5a')
+                    for b in data[idx:]:
+                        self.parser.feed_byte(b)
+                    buf.clear()
+                else:
+                    # حالت auto/csv: سرهم‌کردن خطوط متنی (Logger v7)
+                    buf.extend(data)
+                    if len(buf) > MAX_LINE_BUF:
+                        buf.clear()          # خط بی‌پایان/نویز — ریست
+                    while True:
+                        nl = buf.find(b'\n')
+                        if nl < 0:
+                            break
+                        line = bytes(buf[:nl])
+                        del buf[:nl + 1]
+                        self._on_line(line)
+            if self.mode == 'binary':
+                self._maybe_beat()   # ضربان فقط برای فریم‌ور باینری
+
+    def _on_line(self, raw: bytes):
+        """یک خط متنی کامل (Logger v7) → رویداد صف.
+        اولین خط معتبر، حالت را دائمی روی 'csv' قفل می‌کند."""
+        try:
+            s = raw.decode('ascii').strip('\r').strip()
+        except UnicodeDecodeError:
+            return                      # نویز باینری قبل از sync — نادیده
+        if not s:
+            return
+        self.rx_lines += 1
+        self.last_rx_any = time.time()
+        if self.mode != 'csv':
+            self.mode = 'csv'
+            self.frame_q.put(('mode', None, None, 'csv'))
+        if s.startswith('D,'):
+            self.frame_q.put(('csv', None, None, ('D', s[2:].split(','))))
+        elif s.startswith('#CSV,'):
+            self.frame_q.put(('csv', None, None, ('HDR', s)))
+        elif s.startswith('#Q,'):
+            self.frame_q.put(('csv', None, None, ('Q', s[3:].split(','))))
+        elif s.startswith('N,'):
+            self.frame_q.put(('csv', None, None, ('N', s[2:])))
+        else:
+            # بنر/گزارش متنی، NMEA خام '$...'، پاسخ فرمان و...
+            self.frame_q.put(('text', None, None, s))
 
     # ---------- TX ----------
     def _write_frame(self, fr: bytes):
@@ -125,6 +180,10 @@ class QuadLink:
             loss = int(100 * self.crc_errors / total)
             q = max(0, q - loss)
         return q
+
+    def protocol_mode(self) -> str:
+        """'auto' | 'binary' (QuadFC F103) | 'csv' (Logger v7)"""
+        return self.mode
 
     def drain(self):
         """تخلیه صف در نخ اصلی — خروجی: لیست رخدادها"""

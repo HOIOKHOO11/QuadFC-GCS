@@ -12,6 +12,7 @@ LEN حداکثر 64 (مطابق TEL_MAX_PAYLOAD فریم‌ور v2.2)
    واقعی idx در کد: 41 (v1) + 2 (v2) + 11 (v2.2) = 54 بایت.
 """
 import struct
+import math
 
 PROTOCOL_VERSION = "1.2"    # هم‌تراز فریم‌ور v2.2 (STATUS v3 + اسلات‌های 9..11)
 
@@ -340,3 +341,177 @@ def cmd_set_mag_matrix(m) -> bytes:
 
 def cmd_set_hover(throttle: float) -> bytes:
     return bytes([CMD_SET_HOVER]) + struct.pack('<f', throttle)
+
+
+# ======================================================================
+# =====  آداپتور یک‌طرفه Logger v7 (فرمت CSV: ‏D / N / #Q)  ============
+# ======================================================================
+# فریم‌ور «QuadFC HC-12 Hardware Logger v7.0» خروجی متنی CSV می‌دهد و
+# پروتکل باینری بالا را نمی‌فهمد. این بخش «فقط سمت GCS» خطوط v7 را به
+# همان dict استاندارد parse_status() تبدیل می‌کند تا UI بدون تغییر کار کند.
+# فریم‌ور برد دست‌نخورده می‌ماند (هیچ فرمانی به آن ارسال نمی‌شود).
+
+V7_U32_NONE = 4294967295          # 0xFFFFFFFF = فیلد ناموجود در v7
+
+# ترتیب دقیق فیلدهای خط D — هم‌تراز رشته #CSV,D,... داخل باینری v7
+V7_FIELDS = [
+    'seq', 'ms', 'log_elapsed_ms', 'mpu_ok',
+    'ax', 'ay', 'az', 'gx', 'gy', 'gz', 'mpu_temp_cC', 'mpu_samples',
+    'ax_min', 'ax_max', 'ay_min', 'ay_max', 'az_min', 'az_max',
+    'gx_min', 'gx_max', 'gy_min', 'gy_max', 'gz_min', 'gz_max',
+    'mag_ok', 'mag_samples',
+    'mx', 'my', 'mz', 'mx_min', 'mx_max', 'my_min', 'my_max', 'mz_min', 'mz_max',
+    'baro_ok', 'baro_samples', 'p_pa', 'baro_temp_cC', 'baro_d1', 'baro_d2',
+    'gps_fix', 'gps_gga_quality', 'gps_sats', 'hdop_centi',
+    'lat_e7', 'lon_e7', 'altitude_cm', 'speed_cms', 'course_cdeg',
+    'utc_hhmmss_milli', 'date_ddmmyy', 'gps_age_ms', 'gps_fix_age_ms',
+    'rc_mode', 'rc_frames', 'rc_channels_count', 'rc_age_ms',
+    'ch1', 'ch2', 'ch3', 'ch4', 'ch5', 'ch6', 'ch7',
+    'ch8', 'ch9', 'ch10', 'ch11', 'ch12', 'ch13', 'ch14',
+    'pa4_adc', 'pa4_pin_mV', 'vdd_mV', 'pa4_source_mV',
+    'i2c_err', 'i2c_nacks', 'i2c_recoveries',
+    'gps_valid', 'gps_bad', 'gps_rx_bytes',
+    'gps_uart_fe', 'gps_uart_ne', 'gps_uart_ore', 'gps_uart_pe',
+    'gps_ring_overrun', 'nmea_q_overrun', 'hc12_tx_backpressure',
+    'rc_bad', 'ppm_glitch', 'ibus_frame_err', 'ibus_checksum_err', 'ibus_frame_drops',
+]
+
+V7_Q_FIELDS = [
+    'ms', 'gps_rx_bytes', 'gps_valid', 'gps_bad',
+    'gps_uart_fe', 'gps_uart_ne', 'gps_uart_ore', 'gps_uart_pe',
+    'gps_ring_overrun', 'nmea_q_overrun',
+    'i2c_err', 'i2c_nacks', 'i2c_recoveries',
+    'rc_frames', 'rc_bad', 'ppm_glitch',
+    'ibus_frame_err', 'ibus_checksum_err', 'log_records',
+    'hc12_rx_errors', 'hc12_tx_backpressure', 'ibus_frame_drops',
+]
+
+
+def parse_v7_header(line: str):
+    """'#CSV,D,seq,...' → لیست نام فیلدها (برای اطمینان از ترتیب) یا None"""
+    parts = line.split(',')
+    if len(parts) > 2 and parts[0] == '#CSV' and parts[1] == 'D':
+        return [p.strip() for p in parts[2:]]
+    return None
+
+
+def parse_v7_d(vals, fields=None):
+    """مقادیر بعد از 'D,' → dict نام‌دار؛ 0xFFFFFFFF و خالی → None"""
+    fields = fields or V7_FIELDS
+    out = {}
+    for i, name in enumerate(fields):
+        if i >= len(vals):
+            break
+        v = vals[i].strip() if isinstance(vals[i], str) else vals[i]
+        if v in ('', None):
+            out[name] = None
+            continue
+        try:
+            n = int(v)
+        except (ValueError, TypeError):
+            out[name] = None
+            continue
+        out[name] = None if n == V7_U32_NONE else n
+    return out
+
+
+def parse_v7_q(vals):
+    """مقادیر بعد از '#Q,' → dict شمارنده‌های سلامت/آمار"""
+    out = {}
+    for i, name in enumerate(V7_Q_FIELDS):
+        if i >= len(vals):
+            break
+        try:
+            out[name] = int(str(vals[i]).strip())
+        except (ValueError, TypeError):
+            out[name] = None
+    return out
+
+
+def v7_battery(mv):
+    """(تعداد سلول، درصد تخمینی) از ولتاژ پک — بزرگ‌ترین S که ولتاژ هر سل
+    در 2.5..4.3V بیفتد؛ درصد خطی تا 4.20V بر سل (تخمینی، بدون بار)."""
+    if not mv or mv <= 0:
+        return 0, 0
+    v = mv / 1000.0
+    cells = 1
+    for s in range(1, 7):
+        pc = v / s
+        if 2.5 <= pc <= 4.3:
+            cells = s
+    pct = int(round(max(0.0, min(100.0, v / (4.2 * cells) * 100.0))))
+    return cells, pct
+
+
+class V7Converter:
+    """خط D لاگر v7 → dict هم‌شکل خروجی parse_status() برای UI موجود.
+
+    - رول/پیچ: تخمینی از شتاب‌سنج (فیلتر ساده α=0.25) — v7 زاویه محاسبه‌شده ندارد
+    - یاو: از course جی‌پی‌اس وقتی fix دارد، وگرنه آخرین مقدار
+    - ارتفاع: فشارسنج نسبت به اولین نمونه اتصال (مرجع صفر) → alt_cm
+    - ولتاژ: pa4_source_mV (تقسیم 100k/33k سمت برد اعمال شده؛ نسبت 4.03)
+    - بایت health از پرچم‌های mpu_ok/baro_ok/gps_fix ساخته می‌شود تا
+      پنل سلامت UI بدون تغییر کار کند."""
+
+    def __init__(self):
+        self.p0 = None
+        self.roll = 0.0
+        self.pitch = 0.0
+        self.yaw = 0.0
+        self.records = 0
+
+    def feed(self, d):
+        self.records += 1
+        st = {'home_lat_e7': 0, 'home_lon_e7': 0, 'sonar_mm10': -1,
+              'alt_target_dm': 0, 'hover': 0.0, 'mode': FM_NORMAL,
+              'state': SYS_DISARMED, 'flags': 0}
+        ax, ay, az = d.get('ax'), d.get('ay'), d.get('az')
+        if ax is not None and ay is not None and az:
+            roll = math.degrees(math.atan2(ay, az))
+            pitch = math.degrees(math.atan2(-ax, math.hypot(ay, az)))
+            k = 0.25
+            self.roll += k * (roll - self.roll)
+            self.pitch += k * (pitch - self.pitch)
+        st['roll'] = round(self.roll, 1)
+        st['pitch'] = round(self.pitch, 1)
+        fix = d.get('gps_fix') or 0
+        if fix:
+            st['flags'] |= F_GPS_FIX
+            c = d.get('course_cdeg')
+            if c:
+                self.yaw = c / 100.0
+        st['yaw'] = round(self.yaw, 1)
+        st['lat_e7'] = d.get('lat_e7') or 0
+        st['lon_e7'] = d.get('lon_e7') or 0
+        st['speed_cms'] = d.get('speed_cms') or 0
+        st['course_cdeg'] = d.get('course_cdeg') or 0
+        st['sats'] = d.get('gps_sats') or 0
+        st['gps_fix'] = bool(fix)
+        hd = d.get('hdop_centi')
+        st['hdop_ok'] = hd is not None and hd < 300
+        p = d.get('p_pa')
+        if p and p > 30000:
+            if self.p0 is None:
+                self.p0 = p
+            try:
+                st['alt_cm'] = int(44330.0 * (1.0 - (p / self.p0) ** 0.190294)
+                                   * 100.0)
+            except (OverflowError, ZeroDivisionError, ValueError):
+                st['alt_cm'] = 0
+        else:
+            st['alt_cm'] = 0
+        mv = d.get('pa4_source_mV') or 0
+        st['volt_c'] = int(round(mv / 10.0))
+        cells, pct = v7_battery(mv)
+        st['batt_pct'] = pct
+        st['cells'] = cells
+        h = 0
+        if d.get('mpu_ok'):
+            h |= HEALTH_IMU_OK
+        if d.get('baro_ok'):
+            h |= HEALTH_BARO_OK
+        if fix:
+            h |= HEALTH_GPS_FRESH
+        st['health'] = h
+        st['fc_quality'] = 100
+        return st

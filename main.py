@@ -41,6 +41,7 @@ from protocol import (TYPE_HEARTBEAT, TYPE_STATUS, TYPE_ACK, TYPE_EVENT,
                       cmd_motor_test, cmd_motor_test_stop, cmd_set_hover,
                       cmd_cal_acc6, cmd_set_mag_matrix)
 from link import QuadLink, list_serial_ports
+from protocol import (V7Converter, parse_v7_d, parse_v7_q, parse_v7_header)
 from widgets import ArtificialHorizon, CompassWidget, StripChart
 
 POLL_MS = 60
@@ -108,7 +109,7 @@ BG, FG, OK, WARN, ERR = "#0b0f14", "#d8e0e8", "#7cd67c", "#ffb300", "#ff6b6b"
 class App:
     def __init__(self, root):
         self.root = root
-        root.title("Ground Control Station — QuadFC F103")
+        root.title("Ground Control Station — QuadFC F103 / Logger v7")
         root.geometry("1180x720")
         root.configure(bg=BG)
         self.link = None            # QuadLink سخت‌افزاری
@@ -117,6 +118,13 @@ class App:
         self.pending = {}           # seq → (label, t0) برای نظارت ACK
         self.stats = {'rx': 0, 'crc': 0}
         self.stack_hwm = {}         # اسلات‌های 9/10 دیباگ: برچسب → مقدار
+        # --- حالت Logger v7 (CSV) ---
+        self.csv_mode = False
+        self.v7conv = V7Converter()
+        self.v7_fields = None       # با هدر #CSV ثبت می‌شود
+        self._last_cells = None
+        self._last_n = None
+        self._n_repeat = 0
         self._build_ui()
         self._poll()
 
@@ -392,6 +400,11 @@ class App:
         return self.demo or self.link
 
     def _send(self, cmd, payload=b"", label=""):
+        if self.csv_mode:
+            self._log("در حالت Logger v7 فرمان باینری معنا ندارد — "
+                      "این فریم‌ور فقط داده می‌فرستد (فرمان‌های حرفی: d/s/g/r/v/p/i/L/x/c/t)",
+                      "warn")
+            return
         s = self._sender()
         if not s:
             self._log("ابتدا متصل شوید", "warn")
@@ -506,6 +519,12 @@ class App:
             for kind, t, s_, p in self.link.drain():
                 if kind == 'frame':
                     self._on_frame_ui(t, s_, p)
+                elif kind == 'csv':
+                    self._on_csv(p)
+                elif kind == 'mode':
+                    self._set_proto_mode(p)
+                elif kind == 'text':
+                    self._on_text(p)
                 else:
                     self.stats['crc'] += 1
                     self._log("فریم خراب (CRC) رد شد", "warn")
@@ -599,6 +618,60 @@ class App:
                 text="مصرف: %.0f mAh  |  جریان: %.2f A" % (f[2], f[3] / 100.0))
 
     # ================= به‌روزرسانی UI =================
+    def _set_proto_mode(self, m):
+        """قفل پروتکل تشخیص‌داده‌شده لینک — 'csv' یعنی Logger v7"""
+        if m == 'csv' and not self.csv_mode:
+            self.csv_mode = True
+            self._log("پروتکل Logger v7 (CSV) شناسایی شد — داده‌های D/N/#Q "
+                      "پارس می‌شود؛ ارسال فرمان باینری غیرفعال است", "warn")
+        elif m == 'binary':
+            self.csv_mode = False
+            self._log("پروتکل باینری QuadFC (v1.2) شناسایی شد", "ok")
+
+    def _on_text(self, line):
+        """خطوط متنی v7 (بنر/گزارش/NMEA خام/پاسخ فرمان) → لاگ"""
+        tag = "info" if (line.startswith('=') or line.startswith('$')
+                         or line.startswith('[')) else "warn"
+        self._log("v7: " + line, tag)
+
+    def _on_csv(self, payload):
+        """رویدادهای CSV لاگر v7: ‏HDR / D / Q / N"""
+        sub, obj = payload
+        if sub == 'HDR':
+            fields = parse_v7_header(obj)
+            if fields and len(fields) >= 90:
+                self.v7_fields = fields
+                self._log(f"هدر CSV لاگر v7 ثبت شد ({len(fields)} فیلد)", "ok")
+        elif sub == 'D':
+            d = parse_v7_d(obj, self.v7_fields)
+            if not d:
+                return
+            st = self.v7conv.feed(d)
+            self._apply_status(st)
+            cells = st.get('cells')
+            if cells != self._last_cells:
+                self._last_cells = cells
+                if cells:
+                    self._log(f"باتری: {st['volt_c'] / 100.0:.2f} V → "
+                              f"پک {cells}S، ~{st['batt_pct']}% (تخمینی)", "info")
+        elif sub == 'Q':
+            q = parse_v7_q(obj)
+            txt = "#Q " + "  ".join(f"{k}={v}" for k, v in q.items()
+                                     if v not in (None, 0))
+            self.txt_dbg.config(state="normal")
+            self.txt_dbg.insert("end", txt + "\n")
+            if float(self.txt_dbg.index('end-1c').split('.')[0]) > 400:
+                self.txt_dbg.delete("1.0", "2.0")
+            self.txt_dbg.see("end")
+            self.txt_dbg.config(state="disabled")
+        elif sub == 'N':
+            if obj != self._last_n:
+                self._last_n = obj
+                self._n_repeat = 0
+                self._log("GPS: " + obj, "info")
+            else:
+                self._n_repeat += 1
+
     def _apply_status(self, d):
         self._set_link_state(True)
         self.horizon.update(d['roll'], -d['pitch'])   # قرارداد هوانوردی
